@@ -1,180 +1,197 @@
-#!/usr/bin/env python
-# coding: utf-8
 
-# In[ ]:
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-import math
-import tqdm
-from functools import partial
-import time
-import itertools
-import seaborn as sbn
-
-MAX_GBIKE = 20
-MAX_MOVE = 5
-MOVE_COST = -2
-ADDITIONAL_PARK_COST = -4
-
-RENT_REWARD = 10
-RENTAL_EXPEC_FIRST_LOC = 3
-RENTAL_EXPEC_SECOND_LOC = 4
-RETURNS_FIRST_LOC = 3
-RETURNS_SECOND_LOC = 2
-
-pBackup = {}
-def poisson(x, lam):
-    global pBackup
-    key = (x ,lam)
-    if key not in pBackup.keys():
-        pBackup[key] = np.exp(-lam) * pow(lam, x) / math.factorial(x)
-    return pBackup[key]
-
-states = []
-for i in range(MAX_GBIKE + 1):
-    for j in range(MAX_GBIKE + 1):
-        states.append([i, j])
+from collections import Counter
+import random
 
 
-class PolicyIteration:
-    def __init__(self, truncate, delta=1e-1, gamma=0.9):
-        self.TRUNCATE = truncate
-        self.actions = np.arange(-MAX_MOVE, MAX_MOVE + 1)
-        self.inverse_actions = {el: ind[0] for ind, el in np.ndenumerate(self.actions)}
-        self.values = np.zeros((MAX_GBIKE + 1, MAX_GBIKE + 1))
-        self.policy = np.zeros(self.values.shape, dtype=np.int)
-        self.delta = delta
-        self.gamma = gamma
+class Board:
+    def __init__(self):
+        self.board = [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ']
 
-    def solve(self):
-        iterations = 0
-        while True:
-            self.values = self.policy_evaluation(self.values, self.policy)
-            
-            policy_change, self.policy = self.policy_improvement(self.actions, self.values, self.policy)
-            # no more policy change possible 
-            if policy_change == 0:
-                break
-            iterations += 1
-       
+    def __str__(self):
+        return   ( "\n 0 | 1 | 2     %s | %s | %s\n"
+                   "---+---+---   ---+---+---\n"
+                   " 3 | 4 | 5     %s | %s | %s\n"
+                   "---+---+---   ---+---+---\n"
+                   " 6 | 7 | 8     %s | %s | %s" % (self.board[0], self.board[1], self.board[2],
+                                                self.board[3], self.board[4], self.board[5],
+                                                self.board[6], self.board[7], self.board[8]))
 
-    # out-place
-    def policy_evaluation(self, values, policy):
+    def is_possible(self, move):
+        # If the move is in the range of 0 to 9 and the cell is empty in board
+        if 0 <= move < 9 and self.board[move] == ' ':
+            return True
+        return False
 
-        global MAX_GBIKE
-        while True:
-            new_values = np.copy(values)
-            k = np.arange(MAX_GBIKE + 1)
-            # cartesian product
-            all_states = ((i, j) for i, j in itertools.product(k, k))
+    def is_winnig(self):
 
-            results = []
-            cook = partial(self.expected_return_pe, policy, values)
-            results = map(cook, all_states)
+        for i in range(0,3):
+            if self.board[i] != ' ' and self.board[0] == self.board[1] == self.board[2]:
+                return True
+            if self.board[i] != ' ' and self.board[i+3*i] == self.board[i+6*i]:
+                return True
 
-            for v, i, j in results:
-                new_values[i, j] = v
+        if self.board[0] != ' ' and self.board[0] == self.board[4] == self.board[8]:
+            return True
 
-            difference = np.abs(new_values - values).sum()
-            print(f'Difference: {difference}')
-            values = new_values
-            if difference < self.delta:
-                print(f'Values are converged!')
-                return values
+        if self.board[2] != ' ' and self.board[2] == self.board[4] == self.board[6]:
+            return True
 
-    def policy_improvement(self, actions, values, policy):
-        new_policy = np.copy(policy)
+    def draw(self):
+        for i in range(9):
+            if self.board[i] != ' ':
+                return False 
+        return True
 
-        expected_action_returns = np.zeros((MAX_GBIKE + 1, MAX_GBIKE + 1, np.size(actions)))
-        cooks = dict()
-        for action in actions:
-            k = np.arange(MAX_GBIKE + 1)
-            all_states = ((i, j) for i, j in itertools.product(k, k))
-            cooks[action] = partial(self.expected_return_pi, values, action)
-            results = map(cooks[action], all_states)
-            for v, i, j, a in results:
-                expected_action_returns[i, j, self.inverse_actions[a]] = v
-        
-        for i,j in states:
-            new_policy[i, j] = actions[np.argmax(expected_action_returns[i, j])]
+    def make_move(self, position, move):
+        self.board[position] = move # '0 or X'
 
-        policy_change = (new_policy != policy).sum()
-        return policy_change, new_policy
+    def board_string(self):
+        return ''.join(self.board)
 
-    # O(n^4) computation for all possible requests and returns
-    def bellman(self, values, action, state):
-        expected_return = 0
-        if self.solve_extension:
-            if action > 0:
-                # Free bus to the second location
-                expected_return += MOVE_COST * (action - 1)
-            else:
-                expected_return += MOVE_COST * abs(action)
+
+class MenaceComputer:
+    def __init__(self):
+        self.matchboxes = {}
+        self.num_win = 0
+        self.num_draw = 0
+        self.num_lose = 0
+
+    def start_game(self):
+        # To trackback the moves
+        self.moves_played = []
+
+    def get_move(self, board):
+        # Find board in matchboxes and choose a bead
+        # If the matchbox is empty, return -1 (resign)
+        board = board.board_string()
+        if board not in self.matchboxes:
+            new_beads = [pos for pos, mark in enumerate(board) if mark == ' ']
+            # Early boards start with more beads
+            self.matchboxes[board] = new_beads * ((len(new_beads) + 2) // 2)
+
+        beads = self.matchboxes[board]
+        if len(beads):
+            bead = random.choice(beads)
+            self.moves_played.append((board, bead))
         else:
-            expected_return += MOVE_COST * abs(action)
+            bead = -1
+        return bead
 
-        for req1 in range(0, self.TRUNCATE):
-            for req2 in range(0, self.TRUNCATE):
-                # moving gbikes
-                gbike_location_one = max(int(min(state[0] - action, MAX_GBIKE)),0)
-                gbike_location_two = max(int(min(state[1] + action, MAX_GBIKE)),0)
+    def win_game(self):
+        # We won, add three beads
+        for (board, bead) in self.moves_played:
+            self.matchboxes[board].extend([bead, bead, bead])
+        self.num_win += 1
 
-                # valid rental requests should be less than actual # of 
-                real_rental_first_loc = min(gbike_location_one, req1)
-                real_rental_second_loc = min(gbike_location_two, req2)
+    def draw_game(self):
+        # A draw, add one bead
+        for (board, bead) in self.moves_played:
+            self.matchboxes[board].append(bead)
+        self.num_draw += 1
 
-                # get credits for renting
-                reward = (real_rental_first_loc + real_rental_second_loc) * RENT_REWARD
+    def lose_game(self):
+        # Lose, remove a bead
+        for (board, bead) in self.moves_played:
+            matchbox = self.matchboxes[board]
+            del matchbox[matchbox.index(bead)]
+        self.num_lose += 1
 
-                if self.solve_extension:
-                    if gbike_location_one >= 10:
-                        reward += ADDITIONAL_PARK_COST
-                    if gbike_location_two >= 10:
-                        reward += ADDITIONAL_PARK_COST
+    def print_stats(self):
+        print('Have learnt %d boards' % len(self.matchboxes))
+        print('W/D/L: %d/%d/%d' % (self.num_win, self.num_draw, self.num_lose))
 
-                gbike_location_one -= real_rental_first_loc
-                gbike_location_two -= real_rental_second_loc
+    def print_probability(self, board):
+        board = board.board_string()
+        print("Stats for this board: " + str(Counter(self.matchboxes[board]).most_common()))
+        
 
-                # probability for current combination of rental requests
-                prob = poisson(req1, RENTAL_EXPEC_FIRST_LOC) * poisson(req2, RENTAL_EXPEC_SECOND_LOC)
-                for ret1 in range(0, self.TRUNCATE):
-                    for ret2 in range(0, self.TRUNCATE):
-                        gbike_first_loc = min(gbike_location_one + ret1, MAX_GBIKE)
-                        gbike_second_loc = min(gbike_location_two + ret2, MAX_GBIKE)
-                        prob_ = poisson(ret1, RETURNS_FIRST_LOC) * poisson(ret2, RETURNS_SECOND_LOC) * prob
-                        expected_return += prob_ * (reward + self.gamma * values[gbike_first_loc, gbike_second_loc])
-        return expected_return
+class Human:
+    def __init__(self):
+        pass
 
-    # Expected return calculator for Policy Evaluation
-    def expected_return_pe(self, policy, values, state):
+    def start_game(self):
+        print("Here We Go!!!")
 
-        action = policy[state[0], state[1]]
-        expected_return = self.bellman(values, action, state)
-        return expected_return, state[0], state[1]
+    def get_move(self, board):
+        while True:
+            move = input('Make a move: ')
+            if board.is_possible(move):
+                break
+            print("Not a valid move")
+        return int(move)
 
-    # Expected return calculator for Policy Improvement
-    def expected_return_pi(self, values, action, state):
+    def win_game(self):
+        print("Congrats.....You won!")
 
-        if ((action >= 0 and state[0] >= action) or (action < 0 and state[1] >= abs(action))) == False:
-            return -float('inf'), state[0], state[1], action
-        expected_return = self.bellman(values, action, state)
-        return expected_return, state[0], state[1], action
+    def draw_game(self):
+        print("Uff! Tough Game It's a draw.")
 
-    def plot(self):
-        print(self.policy)
-        fig = sbn.heatmap(np.flipud(policy), ax=axes[-1], cmap="YlGnBu")
-        fig.figure()
-        fig.xlim(0, MAX_GBIKE + 1)
-        fig.ylim(0, MAX_GBIKE + 1)
-        fig.savefig('plot_gbike_sync.png')
-        fig.close()
+    def lose_game(self):
+        print("You losssse. Better Luck Next Time!!")
+
+def play_game(first, second, silent=False):
+    first.start_game()
+    second.start_game()
+    board = Board()
+
+    if not silent:
+        print("\n\nStarting a new game!")
+        print(board)
+
+    while True:
+        if not silent:
+            first.print_probability()
+        move = first.get_move(board)
+        if move == -1:
+            if not silent:
+                print("Player has resigned his Game!!!")
+            first.lose_game()
+            second.win_game()
+            break
+        board.make_move(move, 'X')
+        if not silent:
+            print(board)
+        if board.is_winning():
+            first.win_game()
+            second.lose_game()
+            break
+        if board.draw():
+            first.draw_game()
+            second.draw_game()
+            break
+
+        if not silent:
+            second.print_probability(board)
+        move = second.get_move(board)
+        if move == -1:
+            if not silent:
+                print("Player has resigned his Game!!!")
+            second.lose_game()
+            first.win_game()
+            break
+        board.make_move(move, 'O')
+        if not silent:
+            print(board)
+        if board.is_winning():
+            second.win_game()
+            first.lose_game()
+            break
+
+
+def main():
+    go_first_menace = MenaceComputer()
+    go_second_menace = MenaceComputer()
+    human = Human()
+
+    for i in range(1000):
+        play_game(go_first_menace, go_second_menace, silent=True)
+
+    go_first_menace.print_stats()
+    go_second_menace.print_stats()
+
+    play_game(go_first_menace, human)
+    play_game(human, go_second_menace)
 
 
 if __name__ == '__main__':
-    TRUNCATE = 9
-    solver = PolicyIteration(TRUNCATE, delta=1e-1, gamma=0.9)
-    solver.solve()
-    solver.plot()
-
+    main()
